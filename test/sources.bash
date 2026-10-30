@@ -69,8 +69,7 @@ CASE_DETAIL=""
 for LOOP_FILE in "$TESTS_ROOT"/json-like.bash \
                  "$TESTS_ROOT"/json-like/*.bash \
                  "$TESTS_ROOT"/util/*.bash \
-                 "$TESTS_ROOT"/test/*.bash \
-                 "$TESTS_ROOT"/prov.bash ; do
+                 "$TESTS_ROOT"/test/*.bash ; do
 
     # A "local" must not be UPPER_CASE.
     while IFS= read -r LOOP_LINE ; do

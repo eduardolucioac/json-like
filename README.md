@@ -296,8 +296,6 @@ Everything else the format allows is taken, including the keys that merely
 *look* like the notation — `{"o.x":1}`, `{"i.0":1}`, `{"0":1}`, `{"+":1}` all
 load and come back out unchanged.
 
-[prov.bash](prov.bash) is a runnable demonstration of the whole round trip.
-
 ## Rules
 
 Refused, because none of them can be represented as JSON — and refused
