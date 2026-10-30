@@ -1,17 +1,31 @@
-# awk/json-like-to_json.awk - writes a "json-like" object as JSON text, for "json-like.bash".
 #
-# Kept apart from "json-like.awk" on purpose: that program is a surgical editor
-# of flattened paths and is left alone. This one is a codec, and its two modes
-# share nothing with it but the way BASH hands an associative array over.
+# awk/json-like-to_json.awk - writes a "json-like" object as JSON text.
 #
-#     MODE "to_json"
+# Not meant to be run by hand. It is loaded once by "json-like.bash" and fed
+# through a pipe by "json_like.to_json".
+#
+# INPUT (stdin, one value per line)
 #
 #     line 1 .... "to_json"
 #     line 2 .... indent width, 0 for compact
 #     line 3 .... "declare -p" of the data array
 #     line 4 .... "declare -p" of the type cache
 #
-#     Writes the JSON document to stdout.
+# OUTPUT
+#
+#     stdout ........... the JSON document
+#     stderr + exit 1 .. on an unknown mode
+#
+# NOTES
+#
+#     Kept apart from "json-like-core.awk" on purpose: that program is a
+#     surgical editor of flattened paths and is left alone. This one is a
+#     codec, and shares nothing with it but the way BASH hands an associative
+#     array over.
+#
+#     The type cache is what carries the shape: it says which paths are
+#     containers, which are arrays, and which of the six JSON types each value
+#     holds. A container with no data row of its own is an EMPTY one.
 #
 # json-like - Nested data structures for BASH "inverted (c)" BSD-3-Clause
 # Eduardo Lucio Amorim Costa

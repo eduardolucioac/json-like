@@ -1,30 +1,18 @@
 #
-# json-like.awk - AWK back end for the "json-like" BASH library.
+# awk/json-like-core.awk - the operations that have to walk every key.
 #
-# This program is NOT meant to be run by hand. It is loaded once by
-# "json-like.bash" (into "$_JSON_LIKE_AWK") and fed through a pipe whenever an
-# operation has to walk the whole internal associative array. BASH loops over
-# associative arrays are slow, so every O(n) operation is delegated here.
+# Not meant to be run by hand. It is loaded once by "json-like.bash" and fed
+# through a pipe whenever an operation has to look at the whole internal
+# associative array. BASH loops over associative arrays are slow, so every
+# O(n) operation is delegated here.
 #
-# INPUT (via stdin, one value per line)
+# INPUT (stdin, one value per line)
 #
 #     line 1 .... mode
 #     line 2 .... native_declaration
-#     line 3 .... key_ends          (object modes)   | key_index  (array modes)
-#     line 4 .... assoc_array_decl  (object modes)   | key_length (array modes)
-#     line 5 .... --                (object modes)   | assoc_array_decl
-#
-# "native_declaration" is a `declare -p` dump of a throwaway associative array
-# holding the target path as its single key. It is needed because BASH applies
-# its own quoting/escaping rules to associative array keys, and the only
-# reliable way to know how a given path LOOKS inside a declaration is to let
-# BASH print it.
-#
-# "assoc_array_decl" is a `declare -p` dump of the array being operated on.
-# BASH always renders values either double quoted ("...") or ANSI-C quoted
-# ($'...'), never bare, which is what makes the row splitting below possible:
-# newlines and tabs inside values arrive escaped, so a declaration is always a
-# single line.
+#     line 3 .... key_ends          (object modes)  | key_index  (array modes)
+#     line 4 .... assoc_array_decl  (object modes)  | key_length (array modes)
+#     line 5 .... --                (object modes)  | assoc_array_decl
 #
 # MODES
 #
@@ -38,8 +26,21 @@
 #
 # OUTPUT
 #
-#     stdout .. the rows that survived, ready for `eval "arr=( ... )"`
+#     stdout ........... the rows that survived, ready for `eval "arr=( ... )"`
 #     stderr + exit 1 .. when a match was required but nothing matched
+#
+# NOTES
+#
+#     "native_declaration" is a `declare -p` dump of a throwaway associative
+#     array holding the target path as its single key. BASH applies its own
+#     quoting to associative array keys, and the only reliable way to know how
+#     a path LOOKS inside a declaration is to let BASH print one.
+#
+#     "assoc_array_decl" is a `declare -p` dump of the array being operated
+#     on. BASH renders a value either double quoted or ANSI-C quoted, never
+#     bare, which is what makes the row splitting possible: a newline inside a
+#     value arrives as the two characters \n, so a declaration is always a
+#     single line.
 #
 # json-like - Nested data structures for BASH "inverted (c)" BSD-3-Clause
 # Eduardo Lucio Amorim Costa

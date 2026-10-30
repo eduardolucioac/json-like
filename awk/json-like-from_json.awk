@@ -1,22 +1,32 @@
+#
 # awk/json-like-from_json.awk - reads JSON text into a "json-like" object.
 #
-#     INPUT, on stdin
+# Not meant to be run by hand. It is loaded once by "json-like.bash" and fed
+# through a pipe by "json_like.from_json".
+#
+# INPUT (stdin)
 #
 #     line 1 .... "from_json"
 #     line 2+ ... the JSON document, which may span any number of lines
 #
-#     OUTPUT, on stdout
+# OUTPUT
 #
-#     Three lines, each the body of a BASH associative array assignment, in
-#     this order: the data, the type cache, the length cache. The caller
-#     evaluates them into the arrays of a fresh object.
+#     stdout ........... three lines, each the body of a BASH associative
+#                        array assignment: the data, the type cache, the
+#                        length cache, in that order. The caller evaluates
+#                        them into the arrays of a fresh object.
+#     stderr + exit 1 .. when the document does not parse, with the reason and
+#                        the position it stopped at.
 #
-#     Every string is emitted ANSI-C quoted, so each of the three is a single
-#     line no matter what the document contained.
+# NOTES
 #
-# This program MUST be run under LC_ALL=C. It decodes \uXXXX into UTF-8 by
-# emitting the bytes one at a time, and outside the C locale "%c" produces a
-# CHARACTER rather than a byte, which would re-encode what is already encoded.
+#     Every string is emitted ANSI-C quoted, so each of the three output lines
+#     is a single line whatever the document contained.
+#
+#     This program MUST be run under LC_ALL=C. It decodes \uXXXX into UTF-8 by
+#     emitting the bytes one at a time, and outside the C locale "%c" produces
+#     a CHARACTER rather than a byte, which would re-encode what is already
+#     encoded.
 #
 # json-like - Nested data structures for BASH "inverted (c)" BSD-3-Clause
 # Eduardo Lucio Amorim Costa
