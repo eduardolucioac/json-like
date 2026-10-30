@@ -28,6 +28,37 @@ for PARSE_FILE in "$TESTS_ROOT"/json-like.bash \
 done
 t_report "$PARSE_FAILURES" "every source file parses with no warning" "$PARSE_DETAIL"
 
+# Every AWK function carries a comment block above it, in the same shape as the
+# BASH docstrings: what it does, then ARGUMENTS, LOCALS, RETURNS. LOCALS is not
+# decoration there -- AWK has no other way to declare one, so a reader cannot
+# otherwise tell an argument from a scratch variable.
+AWK_DOC_FAILURES=0
+AWK_DOC_DETAIL=""
+for LOOP_FILE in "$TESTS_ROOT"/awk/*.awk ; do
+    while IFS= read -r LOOP_LINE ; do
+        AWK_FUNCTION="${LOOP_LINE#*:}"
+        AWK_LINE="${LOOP_LINE%%:*}"
+        if ((AWK_LINE < 2)) || [[ "$(sed -n "$((AWK_LINE - 1))p" "$LOOP_FILE")" != \#* ]] ; then
+            AWK_DOC_FAILURES=$((AWK_DOC_FAILURES + 1))
+            AWK_DOC_DETAIL="$(basename "$LOOP_FILE"): $AWK_FUNCTION has no comment block"
+        fi
+    done < <(grep -n '^function ' "$LOOP_FILE" | sed 's/(.*//')
+done
+t_report "$AWK_DOC_FAILURES" "every AWK function carries a comment block" "$AWK_DOC_DETAIL"
+
+# The AWK programs have to compile. A syntax error in one of them only shows up
+# when the operation that uses it runs, which can be far from here.
+AWK_PARSE_FAILURES=0
+AWK_PARSE_DETAIL=""
+for LOOP_FILE in "$TESTS_ROOT"/awk/*.awk ; do
+    AWK_PARSE_OUTPUT=$(awk -f "$LOOP_FILE" < /dev/null 2>&1)
+    if (( $? > 1 )) ; then
+        AWK_PARSE_FAILURES=$((AWK_PARSE_FAILURES + 1))
+        AWK_PARSE_DETAIL="$(basename "$LOOP_FILE"): $AWK_PARSE_OUTPUT"
+    fi
+done
+t_report "$AWK_PARSE_FAILURES" "every AWK program compiles" "$AWK_PARSE_DETAIL"
+
 # One case convention, everywhere: a variable declared "local" inside a
 # function is lower_case, and anything at script or global scope is
 # UPPER_CASE. The library follows it without exception; this keeps it that

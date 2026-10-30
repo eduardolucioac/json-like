@@ -22,14 +22,46 @@
 # Eduardo Lucio Amorim Costa
 #
 
+# Stop with a message that says where in the document it stopped.
+#
+#     ARGUMENTS
+#         msg .. string, required. What was wrong, in lower case: it is read as
+#                the middle of a sentence.
+#
+#     RETURNS
+#         Never. Writes to stderr and exits 1.
+#
+# The position matters more than the wording. A document that fails to parse is
+# usually long, and "at position 190" is the difference between a fix and a
+# hunt.
 function err(msg) {
     printf "%s", "ERROR! " msg " at position " POS "." > "/dev/stderr"
     close("/dev/stderr")
     exit 1
 }
 
+# Read one character of the document.
+#
+#     ARGUMENTS
+#         n .. integer, required. 1 based position.
+#
+#     RETURNS
+#         The character, or "" past the end.
 function at(n) { return substr(DOC, n, 1) }
 
+# Advance POS past any JSON whitespace.
+#
+#     LOCALS
+#         c
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS.
+#
+# RFC 8259 section 2 allows space, tab, line feed and carriage return between
+# any two tokens, and nothing else.
 function skip_ws(    c) {
     while (POS <= DOCLEN) {
         c = at(POS)
@@ -38,13 +70,35 @@ function skip_ws(    c) {
     }
 }
 
+# Consume one required character, or stop.
+#
+#     ARGUMENTS
+#         c .. string, required. The single character that must be there.
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS past it, or exits through "err".
 function expect(c) {
     if (at(POS) != c) err("expected \"" c "\" but found \"" at(POS) "\"")
     POS++
 }
 
-# One code point into its UTF-8 bytes. Written out rather than left to "%c"
-# with a large value, which depends on the locale.
+# Turn one code point into its UTF-8 bytes.
+#
+#     ARGUMENTS
+#         cp .. integer, required. The code point.
+#
+#     LOCALS
+#         o
+#
+#     RETURNS
+#         The bytes, as a string.
+#
+# Written out rather than left to "%c" with a large value, which depends on the
+# locale: outside LC_ALL=C, "%c" hands back a CHARACTER and encodes what is
+# already encoded. This is why the whole program is run under the C locale.
 function utf8(cp,    o) {
     if (cp < 0x80) return sprintf("%c", cp)
     if (cp < 0x800)
@@ -59,6 +113,17 @@ function utf8(cp,    o) {
                                0x80 + (cp % 64))
 }
 
+# Read exactly four hexadecimal digits.
+#
+#     LOCALS
+#         i, c, v, n
+#
+#     RETURNS
+#         Their value.
+#
+#     SIDE EFFECTS
+#         Moves POS past them, or exits through "err" if any of the four is not
+#         a hexadecimal digit.
 function hex4(    i, c, v, n) {
     n = 0
     for (i = 0; i < 4; i++) {
@@ -70,8 +135,22 @@ function hex4(    i, c, v, n) {
     return n
 }
 
-# A JSON string, from its opening quote to its closing one. Returns the text
-# it denotes, decoded.
+# Read a JSON string, from its opening quote to its closing one.
+#
+#     LOCALS
+#         out, c, cp, lo
+#
+#     RETURNS
+#         The text it denotes, decoded.
+#
+#     SIDE EFFECTS
+#         Moves POS past the closing quote.
+#
+# Every escape the grammar allows is handled, "\uXXXX" included. A high
+# surrogate must be followed by a low one, and a lone surrogate of either kind
+# is refused: the pair denotes a single code point above the basic plane, and
+# half of it denotes nothing. A raw control character inside a string is
+# refused too, which RFC 8259 section 7 requires.
 function parse_string(    out, c, cp, lo) {
     expect("\"")
     out = ""
@@ -114,8 +193,21 @@ function parse_string(    out, c, cp, lo) {
     }
 }
 
-# A JSON number, returned as the text that was written, so that it goes back
-# out exactly as it came in.
+# Read a JSON number.
+#
+#     LOCALS
+#         start, c, seen
+#
+#     RETURNS
+#         The TEXT that was written, not its value.
+#
+#     SIDE EFFECTS
+#         Moves POS past it.
+#
+# Returning the text is deliberate: it goes back out exactly as it came in, so
+# "1E+10" stays "1E+10" rather than becoming whatever a float would print. The
+# grammar is the one in RFC 8259 section 6, which is why a leading zero is
+# refused.
 function parse_number(    start, c, seen) {
     start = POS
     if (at(POS) == "-") POS++
@@ -143,14 +235,36 @@ function parse_number(    start, c, seen) {
     return substr(DOC, start, POS - start)
 }
 
+# Consume one of the three literal names, or stop.
+#
+#     ARGUMENTS
+#         word .. string, required. "true", "false" or "null".
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS past it, or exits through "err".
 function literal(word) {
     if (substr(DOC, POS, length(word)) != word) err("unexpected input")
     POS += length(word)
 }
 
-# The flattened-path escaping, the same one "json-like/path.bash" applies.
-# The backslash goes first: it is the escape character, so leaving it alone
-# would make the mapping lossy.
+# Escape a key for a flattened path.
+#
+#     ARGUMENTS
+#         k .. string, required. The key, as the document spells it.
+#
+#     LOCALS
+#         out, i, c
+#
+#     RETURNS
+#         The escaped key.
+#
+# The same escaping "json-like/path.bash" applies. The backslash goes FIRST,
+# and it has to: it is the escape character, so leaving it alone would make the
+# mapping lossy -- a key ending in one, joined to a child, would produce the
+# same path as a single key holding a dot.
 function esc_key(k,    out, i, c) {
     out = ""
     for (i = 1; i <= length(k); i++) {
@@ -161,8 +275,20 @@ function esc_key(k,    out, i, c) {
     return out
 }
 
-# ANSI-C quoting, so that whatever the document held survives the trip back
-# through BASH on a single line.
+# Quote a string the ANSI-C way, so BASH can read it back.
+#
+#     ARGUMENTS
+#         s .. string, required.
+#
+#     LOCALS
+#         out, i, c, n
+#
+#     RETURNS
+#         The string as "$'...'".
+#
+# Whatever the document held has to survive the trip back through BASH on a
+# SINGLE line, because the three output blocks are read one line at a time. A
+# newline inside a value would otherwise split a block in two.
 function bq(s,    out, i, c, n) {
     out = ""
     for (i = 1; i <= length(s); i++) {
@@ -179,16 +305,57 @@ function bq(s,    out, i, c, n) {
     return "$'" out "'"
 }
 
+# Record one leaf: its value, and which JSON type it is.
+#
+#     ARGUMENTS
+#         path .. string, required. The flattened path.
+#         value . string, required. The value, decoded.
+#         type .. integer, required. 3 string, 4 number, 5 boolean, 6 null.
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Appends to DATA_OUT and TYPE_OUT.
 function put_data(path, value, type) {
     DATA_OUT = DATA_OUT "[" bq(path) "]=" bq(value) " "
     TYPE_OUT = TYPE_OUT "[" bq(path) "]=\"" type "\" "
 }
 
+# Record one container.
+#
+#     ARGUMENTS
+#         path .. string, required. The flattened path.
+#         type .. integer, required. 0 object, 1 array.
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Appends to TYPE_OUT, unless the path is the root, which is implicit
+#         and has no row of its own.
+#
+# A container owns no data row: it exists in the type cache, and its children
+# carry the values. That is also what makes an EMPTY container representable.
 function put_node(path, type) {
     if (path == "") return            # the root is implicit
     TYPE_OUT = TYPE_OUT "[" bq(path) "]=\"" type "\" "
 }
 
+# Read any JSON value, dispatching on its first character.
+#
+#     ARGUMENTS
+#         path .. string, required. Where this value sits. "" is the root.
+#         depth . integer, required. Guards against runaway nesting.
+#
+#     LOCALS
+#         c, s
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS, and records whatever it read.
 function parse_value(path, depth,    c, s) {
     if (depth > 200) err("nesting is too deep")
     skip_ws()
@@ -204,6 +371,25 @@ function parse_value(path, depth,    c, s) {
     err("unexpected character \"" c "\"")
 }
 
+# Read an object, and every member of it.
+#
+#     ARGUMENTS
+#         path .. string, required. Where the object sits.
+#         depth . integer, required.
+#
+#     LOCALS
+#         key, child, n
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS, and records the object and its descendants.
+#
+# The empty key is refused here. It is valid JSON, but at the first level its
+# flattened path would be the empty string -- which is how the root itself is
+# spelled -- and holding it deeper while refusing it at the top would be a
+# positional exception. One rule instead.
 function parse_object(path, depth,    key, child, n) {
     expect("{")
     put_node(path, 0)
@@ -226,6 +412,24 @@ function parse_object(path, depth,    key, child, n) {
     }
 }
 
+# Read an array, and every element of it.
+#
+#     ARGUMENTS
+#         path .. string, required. Where the array sits.
+#         depth . integer, required.
+#
+#     LOCALS
+#         child, n
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Moves POS, records the array and its descendants, and writes the
+#         element count to LEN_OUT.
+#
+# An empty array still gets its length, zero, so that a later append lands at
+# index 0 rather than finding nothing there.
 function parse_array(path, depth,    child, n) {
     expect("[")
     put_node(path, 1)

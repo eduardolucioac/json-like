@@ -45,15 +45,27 @@
 # Eduardo Lucio Amorim Costa
 #
 
-# Extracts the target path out of the single key "native_declaration" dump.
+# Pull the target path out of the one key "native_declaration" dump.
 #
-# BASH renders `declare -p` of a one key associative array as either
+#     ARGUMENTS
+#         native_declaration .. string, required. A "declare -p" of a one key
+#                               associative array whose only key IS the path.
+#
+#     LOCALS
+#         decl_prefix, decl_suffix, key_path
+#
+#     RETURNS
+#         The path, with the surrounding double quotes removed when BASH added
+#         them.
+#
+# BASH renders the dump as either
 #
 #     declare -A associative_array=([plain_key]="1" )
 #     declare -A associative_array=(["key needing quotes"]="1" )
 #
-# so the path is whatever sits between the fixed prefix and the fixed suffix,
-# minus the optional surrounding double quotes.
+# so the path is whatever sits between the fixed prefix and the fixed suffix.
+# Letting BASH print it is the only reliable way to know how a path LOOKS
+# inside a declaration, which is what every comparison below needs.
 function get_key_path_from_declaration(native_declaration,
                                            decl_prefix,
                                            decl_suffix,
@@ -77,20 +89,41 @@ function get_key_path_from_declaration(native_declaration,
     return key_path
 }
 
-# Tells whether "mode" addresses a single array element (and therefore reads
-# "key_index"/"key_length" from stdin) instead of a whole path.
+# Say whether a mode addresses ONE array element rather than a whole path.
+#
+#     ARGUMENTS
+#         mode .. string, required.
+#
+#     RETURNS
+#         1 for "delete_path_array", "unset_type_array" and
+#         "unset_length_array", 0 otherwise.
+#
+# The array modes read "key_index" and "key_length" from stdin, which is why
+# the input protocol has two shapes.
 function is_array_mode(mode) {
     return (mode == "delete_path_array" \
             || mode == "unset_type_array" \
             || mode == "unset_length_array")
 }
 
-# Tells whether "mode" must match at least one row to be considered successful.
+# Say whether a mode must match at least one row to count as successful.
 #
-# The cache maintenance modes ("unset_*") may legitimately match nothing: a
-# leaf has no descendants, and an array element need not have any entry in the
-# type/length caches. Reporting that as an error is what used to make every
-# successful "delete" print a bogus message to stderr.
+#     ARGUMENTS
+#         mode .. string, required.
+#
+#     RETURNS
+#         1 for "get" and "delete_path", 0 for everything else.
+#
+# The cache maintenance modes may legitimately match nothing: a leaf has no
+# descendants, and an array element need not appear in either cache. Treating
+# that as an error is what used to make every successful "delete" print a bogus
+# message to stderr.
+#
+# "delete_path_array" is NOT here on purpose. The BASH side validates the index
+# against the array length before calling, so by this point the index is known
+# to exist. Matching no row only means the elements carry no data of their own,
+# which is what an empty container is; the rows above it still have to be
+# renumbered, and demanding a match would throw that work away.
 function mode_requires_match(mode) {
     # "delete_path_array" is NOT here on purpose. The BASH side validates the
     # index against the array length before calling, so by this point the index
@@ -102,8 +135,32 @@ function mode_requires_match(mode) {
             || mode == "delete_path")
 }
 
-# Computes the derived values every row comparison needs, once, before the main
-# loop.
+# Work out, once, every derived value the row loop will compare against.
+#
+#     ARGUMENTS
+#         mode ................ string, required.
+#         native_declaration .. string, required. See
+#                               "get_key_path_from_declaration".
+#         key_index ........... integer, array modes only. The index being
+#                               removed.
+#         key_length .......... integer, array modes only. The length BEFORE the
+#                               removal.
+#         rtn_array ........... array, required. Filled in; see RETURNS.
+#
+#     LOCALS
+#         key_path, path_beginning, key_path_begin, key_path_end_for_index,
+#         adjust_subsequent
+#
+#     RETURNS
+#         Nothing. "rtn_array" receives, in order:
+#             1 .. key_path ................ the target path
+#             2 .. path_beginning .......... what to strip from a subtree read
+#             3 .. key_path_begin .......... the literal prefix of an element key
+#             4 .. key_path_end_for_index .. where the index starts in that key
+#             5 .. adjust_subsequent ....... 1 when higher indexes have to move
+#
+# Computing these per row would repeat the same work thousands of times, and
+# the row loop is the only part of this program that is hot.
 function prepare_operation(mode,
                            native_declaration,
                            key_index,
@@ -166,11 +223,25 @@ function prepare_operation(mode,
     rtn_array[5] = adjust_subsequent
 }
 
-# Decides whether "current_row" belongs to "key_path".
+# Decide whether a row belongs to the target path.
 #
-# A plain prefix test is not enough: the path "object.a" must not match the row
-# of "object.ab". Every comparison therefore pins both a prefix and a suffix
-# around the path, so only the path itself ("]"/"\"]") or one of its descendants
+#     ARGUMENTS
+#         mode ........ string, required.
+#         current_row . string, required. One "[key]=value" row.
+#         key_ends .... integer, required. 0 when the path ends with a key,
+#                       1 when it ends with an index.
+#         key_path .... string, required. The target path.
+#
+#     LOCALS
+#         index_start, index_end
+#
+#     RETURNS
+#         1 when the row is the path itself or one of its descendants,
+#         0 otherwise.
+#
+# A plain prefix test is not enough: the path "object.a" would match the row of
+# "object.ab". Every comparison therefore pins a prefix AND a suffix around the
+# path, so only the path itself ("]" / "\"]") or a genuine descendant
 # ("." / "[") can match.
 function path_match_rules(mode,
                           current_row,
@@ -238,7 +309,28 @@ function path_match_rules(mode,
     return 0
 }
 
-# "get": keeps the matching rows, rebased on the parent of the requested path.
+# "get": keep the matching rows, rebased on the parent of the requested path.
+#
+#     ARGUMENTS
+#         current_row ........... string, required.
+#         key_ends .............. integer, required.
+#         key_path .............. string, required.
+#         valid_path_or_indexes . integer, required. 1 once anything matched.
+#         path_beginning ........ string, required. Stripped from each key so
+#                                 the result is relative to the parent.
+#         assoc_array_output .... string, required. What has been kept so far.
+#         rtn_array ............. array, required. Filled in; see RETURNS.
+#
+#     LOCALS
+#         substring_pos
+#
+#     RETURNS
+#         Nothing. "rtn_array" receives:
+#             1 .. valid_path_or_indexes
+#             2 .. assoc_array_output
+#
+# The keys of a subtree read come back relative to the PARENT of the requested
+# path, which is what "path_beginning" removes.
 function process_get_rows(current_row,
                           key_ends,
                           key_path,
@@ -273,13 +365,32 @@ function process_get_rows(current_row,
     rtn_array[2] = assoc_array_output
 }
 
-# "delete_path_array" / "unset_type_array" / "unset_length_array": drops every
-# row under "key_path[key_index]" and shifts the higher indexes down by one, so
-# the array stays dense.
+# Drop one array element and renumber the ones above it, one row at a time.
 #
-# The same walk serves the data array and both caches. Keeping them in sync
-# matters: a stale type or length entry makes a later "get"/"set" address an
-# element that no longer exists.
+#     ARGUMENTS
+#         current_row ............ string, required.
+#         key_path_begin ......... string, required. The literal prefix every
+#                                  element key of this array starts with.
+#         key_index .............. integer, required. The index being removed.
+#         valid_path_or_indexes .. integer, required.
+#         adjust_subsequent ...... integer, required. 1 when higher indexes have
+#                                  to move down.
+#         key_path_end_for_index . integer, required. Where the index starts in
+#                                  an element key.
+#         assoc_array_output ..... string, required.
+#         rtn_array .............. array, required. Filled in; see RETURNS.
+#
+#     LOCALS
+#         delete_row, row_substring, substring_pos, index_now, right_part
+#
+#     RETURNS
+#         Nothing. "rtn_array" receives:
+#             1 .. valid_path_or_indexes
+#             2 .. assoc_array_output
+#
+# The same walk serves the data array and both caches. Keeping them in step
+# matters: a stale type or length entry makes a later "get" or "set" address an
+# element that is no longer there.
 function process_array_rows(current_row,
                             key_path_begin,
                             key_index,
@@ -337,8 +448,24 @@ function process_array_rows(current_row,
     rtn_array[2] = assoc_array_output
 }
 
-# "delete_path" / "unset_type" / "unset_length": keeps every row that does NOT
-# belong to "key_path".
+# Drop a path and every descendant of it, one row at a time.
+#
+#     ARGUMENTS
+#         mode .................. string, required.
+#         current_row ........... string, required.
+#         key_ends .............. integer, required.
+#         key_path .............. string, required.
+#         valid_path_or_indexes . integer, required.
+#         assoc_array_output .... string, required.
+#         rtn_array ............. array, required. Filled in; see RETURNS.
+#
+#     RETURNS
+#         Nothing. "rtn_array" receives:
+#             1 .. valid_path_or_indexes
+#             2 .. assoc_array_output
+#
+# A row that does NOT match is what gets kept: this builds the survivors rather
+# than removing the losers.
 function process_delete_path_unset_type_unset_length_rows(mode,
                                                           current_row,
                                                           key_ends,
@@ -359,7 +486,21 @@ function process_delete_path_unset_type_unset_length_rows(mode,
     rtn_array[2] = assoc_array_output
 }
 
-# Dispatches one row to the handler of the current mode.
+# Hand one row to the handler of the current mode.
+#
+#     ARGUMENTS
+#         mode, current_row, key_ends, key_path, valid_path_or_indexes,
+#         path_beginning, assoc_array_output, key_path_begin, key_index,
+#         adjust_subsequent, key_path_end_for_index .. all required; each
+#         handler uses the subset that applies to it.
+#         rtn_array .. array, required. Filled in by the handler.
+#
+#     RETURNS
+#         Nothing. "rtn_array" carries the handler result back.
+#
+# AWK passes arrays by reference and scalars by value, which is what makes
+# "rtn_array" the way out and the scalars safe to pass around: a handler cannot
+# disturb the caller copy of any of them.
 function process_rows(mode,
                       current_row,
                       key_ends,

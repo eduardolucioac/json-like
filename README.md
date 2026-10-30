@@ -338,7 +338,7 @@ json_like.set "$OBJ" "s.v" "o.arr" "i.9"         # arrays stay dense
 ## Testing
 
 ```bash
-./test/test.bash          # 220 integrity tests
+./test/test.bash          # 222 integrity tests
 ./test/test.bash --perf   # and the timings
 ```
 

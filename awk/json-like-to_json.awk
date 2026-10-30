@@ -17,8 +17,20 @@
 # Eduardo Lucio Amorim Costa
 #
 
-# Decodes one value as BASH rendered it in a declaration: "..." or $'...'.
-# BASH never writes a value bare, so one of the two always applies.
+# Decode one value as BASH rendered it in a declaration.
+#
+#     ARGUMENTS
+#         raw .. string, required. Either "..." or $'...', with the quotes.
+#
+#     LOCALS
+#         out, i, n, c, nxt, ansi
+#
+#     RETURNS
+#         The text it denotes.
+#
+# BASH never writes a value bare, so one of the two forms always applies. The
+# ANSI-C form carries the control characters as escapes, which is what keeps a
+# whole declaration on one line however many newlines a value holds.
 function decode_value(raw,    out, i, n, c, nxt, ansi) {
     n = length(raw)
     if (n == 0) return ""
@@ -56,11 +68,24 @@ function decode_value(raw,    out, i, n, c, nxt, ansi) {
     return out
 }
 
-# Walks a "declare -p" dump and fills "keys" and "vals", both 1-based.
+# Walk a "declare -p" dump and split it into keys and values.
+#
+#     ARGUMENTS
+#         decl .. string, required. The dump.
+#         keys .. array, required. Filled in, 1 based.
+#         vals .. array, required. Filled in, 1 based, parallel to "keys".
+#
+#     LOCALS
+#         i, n, c, depth, start, row, eq, rawkey, rawval, count
+#
+#     RETURNS
+#         How many pairs were found.
 #
 # The dump is always a single line: BASH renders a newline inside a value as
-# the two characters \n. Rows are cut at each closing quote, the same way
-# "json-like.awk" does it, because the same guarantee holds here.
+# the two characters \n. A key is either bare or, when BASH decided it needed
+# quoting, a double quoted string -- and a quoted one can contain "]", which is
+# exactly what an array path looks like, so it has to be consumed as a string
+# rather than scanned for its closing bracket.
 function parse_declaration(decl, keys, vals,
                            i, n, c, depth, start, row, eq, rawkey, rawval, count) {
     count = 0
@@ -132,9 +157,20 @@ function parse_declaration(decl, keys, vals,
     return count
 }
 
-# A key inside a declaration is quoted by BASH's own rules. Only the backslash
-# escapes it adds have to come back off; the flattened-path escaping is a
-# separate layer, undone later by "unescape_path_key".
+# Take off the quoting BASH added around a key.
+#
+#     ARGUMENTS
+#         raw .. string, required. The key as it appeared in the dump.
+#
+#     LOCALS
+#         out, i, n, c
+#
+#     RETURNS
+#         The key, still carrying the flattened-path escaping.
+#
+# Two layers of escaping meet here and only the outer one comes off. The inner
+# one is undone later, by "unescape_path_key", and only for the last component
+# of a path.
 function unescape_declaration_key(raw,    out, i, n, c) {
     n = length(raw)
     if (n >= 2 && substr(raw, 1, 1) == "\"" && substr(raw, n, 1) == "\"") {
@@ -150,17 +186,40 @@ function unescape_declaration_key(raw,    out, i, n, c) {
     return out
 }
 
-# True when the character at "pos" carries structure, that is, it is preceded
-# by an EVEN number of backslashes. The escaping doubles a backslash, so this
-# is exact.
+# Say whether the character at a position carries structure.
+#
+#     ARGUMENTS
+#         path .. string, required. A flattened path.
+#         pos ... integer, required. 1 based.
+#
+#     LOCALS
+#         k, slashes
+#
+#     RETURNS
+#         1 when the character is preceded by an EVEN number of backslashes,
+#         0 otherwise.
+#
+# Exact, because the escaping doubles a backslash: a "." that came from a key
+# always carries an odd count, and a separator always carries an even one.
 function is_structural(path, pos,    k, slashes) {
     slashes = 0
     for (k = pos - 1; k >= 1 && substr(path, k, 1) == "\\"; k--) slashes++
     return (slashes % 2) == 0
 }
 
-# Splits a flattened path into the parent path and the last component.
-# Fills: SPLIT_PARENT, SPLIT_ITEM, SPLIT_IS_INDEX.
+# Split a flattened path into its parent and its last component.
+#
+#     ARGUMENTS
+#         path .. string, required.
+#
+#     RETURNS
+#         Nothing.
+#
+#     SIDE EFFECTS
+#         Sets SPLIT_PARENT, SPLIT_ITEM and SPLIT_IS_INDEX.
+#
+# Three shapes have to be told apart: a path ending in an index, one ending in
+# a key below another key, and one ending in a key below an array element.
 function split_path(path,    i, n, c) {
     n = length(path)
     SPLIT_PARENT = ""; SPLIT_ITEM = path; SPLIT_IS_INDEX = 0
@@ -192,7 +251,16 @@ function split_path(path,    i, n, c) {
     }
 }
 
-# Undoes the flattened-path escaping of one key.
+# Undo the flattened-path escaping of one key.
+#
+#     ARGUMENTS
+#         key .. string, required. One component, already split off.
+#
+#     LOCALS
+#         out, i, n, c
+#
+#     RETURNS
+#         The key as the document spelled it.
 function unescape_path_key(key,    out, i, n, c) {
     out = ""; n = length(key)
     for (i = 1; i <= n; i++) {
@@ -203,7 +271,20 @@ function unescape_path_key(key,    out, i, n, c) {
     return out
 }
 
-# Escapes a string for JSON output, RFC 8259 section 7.
+# Escape a string for JSON output, and quote it.
+#
+#     ARGUMENTS
+#         s .. string, required.
+#
+#     LOCALS
+#         out, i, n, c, o
+#
+#     RETURNS
+#         The string, escaped and wrapped in double quotes.
+#
+# Per RFC 8259 section 7: the quote and the backslash always, the three common
+# control characters as their short forms, and everything else below space as
+# "\u00XX".
 function json_escape(s,    out, i, n, c, o) {
     out = ""; n = length(s)
     for (i = 1; i <= n; i++) {
@@ -220,6 +301,16 @@ function json_escape(s,    out, i, n, c, o) {
     return "\"" out "\""
 }
 
+# Build the indentation for one nesting level.
+#
+#     ARGUMENTS
+#         level .. integer, required.
+#
+#     LOCALS
+#         s, i
+#
+#     RETURNS
+#         The spaces, or "" when the document is compact.
 function pad(level,    s, i) {
     if (INDENT == 0) return ""
     s = ""
@@ -227,9 +318,28 @@ function pad(level,    s, i) {
     return s
 }
 
+# Give the line break a nesting level ends with.
+#
+#     RETURNS
+#         A newline, or "" when the document is compact.
 function nl() { return INDENT == 0 ? "" : "\n" }
 
-# Emits the node at "path". "level" is only used for indentation.
+# Render the node at a path, and everything under it.
+#
+#     ARGUMENTS
+#         path ... string, required. "" is the root.
+#         level .. integer, required. Used for indentation only.
+#
+#     LOCALS
+#         t, i, out, n, child, sep
+#
+#     RETURNS
+#         The JSON text for that node.
+#
+# Recursive. A value comes out in the shape of the type it was written with,
+# which is what the value tags bought: a number bare, a string quoted. A
+# container with no children comes out as {} or [], which is how an empty one
+# is carried.
 function emit(path, level,    t, i, out, n, child, sep) {
     t = TYPE[path]
 
