@@ -27,6 +27,8 @@ json_like.get TITLE "$CONFIG" "window" "title"    # -> MY SENSORS
 - [What it looks like elsewhere](#what-it-looks-like-elsewhere)
 - [Requirements](#requirements)
 - [Installing](#installing)
+- [First example](#first-example)
+  - [Why the last step matters](#why-the-last-step-matters)
 - [Quick start](#quick-start)
 - [Writing](#writing)
 - [Reading](#reading)
@@ -121,6 +123,76 @@ source "$MY_SCRIPT_DIRECTORY/json-like/json-like.bash" || exit 1
 
 It defines nothing but `json_like.*` functions and a few `_JSON_LIKE_*`
 variables, and installs no traps.
+
+## First example
+
+Three steps: create, use, release.
+
+```bash
+#!/bin/bash
+
+source "./json-like/json-like.bash"
+
+# 1. CREATE. The variable receives an opaque id, not the data.
+declare CONFIG
+json_like.set_obj CONFIG
+
+# 2. USE.
+json_like.set "$CONFIG" "s.MY SENSORS" "o.window" "o.title"
+json_like.set "$CONFIG" "n.563"        "o.window" "o.width"
+
+declare TITLE
+json_like.get TITLE "$CONFIG" "window" "title"
+echo "$TITLE"                                     # MY SENSORS
+
+# 3. RELEASE.
+json_like.unset_obj CONFIG
+```
+
+### Why the last step matters
+
+`CONFIG` never holds your data. It holds an **id**, and the data lives in
+three global arrays named after that id:
+
+```
+JL_DATA_<ID>          the values
+JL_TYPE_CACHE_<ID>    what kind of node each path is
+JL_LENGTH_CACHE_<ID>  how long each array is
+```
+
+That is what lets an object be passed around by value — `"$CONFIG"` is a short
+string — but it also means **the object does not go away when the variable
+does**. Dropping the variable only throws away the label; the three arrays stay
+declared, and nothing can name them any more.
+
+It shows up fastest inside a function, where the variable is `local`:
+
+```bash
+make_one() {
+    local OBJECT
+    json_like.set_obj OBJECT
+    json_like.set "$OBJECT" "s.x" "o.a"
+}                       # OBJECT is gone. The three arrays are not.
+
+for I in 1 2 3 4 5 ; do make_one ; done
+```
+
+Five calls leave five objects behind — fifteen global arrays that nothing
+references and nothing will collect, because BASH has no garbage collector.
+Add `json_like.unset_obj OBJECT` before the function returns and the count
+stays at zero.
+
+So: **every `json_like.set_obj` wants a matching `json_like.unset_obj`.** It
+removes the three arrays and clears your variable, so a stale id cannot be
+used by accident either.
+
+A script that may exit early can hang it on a trap:
+
+```bash
+declare CONFIG
+json_like.set_obj CONFIG
+trap 'json_like.unset_obj CONFIG' EXIT
+```
 
 ## Quick start
 
